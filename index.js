@@ -124,7 +124,8 @@ class PuppeteerVideoStream extends PassThrough {
           this.recordingFinish = this.beginRecording(this.canvas.captureStream(fps), codec, interval, bitsPerSecond)
         }
 
-        async draw (imageData, format) {
+        async draw (imageData, format, interval = 1000) {
+          clearInterval(this._fakeAnimationInterval)
           const data = await fetch(`data:image/${format};base64,${imageData}`)
             .then(res => res.blob())
             .then(blob => createImageBitmap(blob))
@@ -132,10 +133,16 @@ class PuppeteerVideoStream extends PassThrough {
           this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
           this.ctx.drawImage(data, 0, 0)
 
+          this._fakeAnimationInterval = setInterval(() => {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+            this.ctx.drawImage(data, 0, 0)
+          }, interval)
+
           return this
         }
 
         stop () {
+          clearInterval(this._fakeAnimationInterval)
           this.running = false
           this.recorder.stop()
           return this
@@ -155,10 +162,11 @@ class PuppeteerVideoStream extends PassThrough {
     client.on('Page.screencastFrame', ({ data, sessionId }) => {
       client.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
       this.page.evaluateHandle(
-        (puppeteerVideoStreamAPI, data, format) => puppeteerVideoStreamAPI.draw(data, format),
+        (puppeteerVideoStreamAPI, data, format, interval) => puppeteerVideoStreamAPI.draw(data, format, interval),
         this.puppeteerVideoStream,
         data,
-        format
+        format,
+        options.interval
       ).catch(() => {})
     })
 
