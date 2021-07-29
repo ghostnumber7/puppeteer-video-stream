@@ -125,29 +125,27 @@ class PuppeteerVideoStream extends PassThrough {
           this.recordingFinish = this.beginRecording(this.canvas.captureStream(fps), codec, interval, bitsPerSecond)
 
           this.repaintInterval = setInterval(() => {
-            requestAnimationFrame(() => {
-              if (!this.drawing && this._lastImage) {
-                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
-                this.ctx.drawImage(this._lastImage, 0, 0)
-              }
-            })
+            this.ctx.fillStyle = this.ctx.fillStyle === 'rgba(0,0,0,0)' ? 'rgba(0,0,0,0.01)' : 'rgba(0,0,0,0)'
+            this.ctx.clearRect(0, 0, 1, 1)
+            this.ctx.fillRect(0, 0, 1, 1)
           }, 1000 / this.fps)
         }
 
         async draw (imageData, format) {
-          clearTimeout(this._enableRepaintTimeout)
+          // clearTimeout(this._enableRepaintTimeout)
           this.drawing = true
           const data = await fetch(`data:image/${format};base64,${imageData}`)
             .then(res => res.blob())
             .then(blob => createImageBitmap(blob))
 
           this._lastImage = data
+          this.ctx.fillStyle = 'rgba(0,0,0,0)'
           this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
           this.ctx.drawImage(data, 0, 0)
 
-          this._enableRepaintTimeout = setTimeout(() => {
-            this.drawing = false
-          }, 1000 / this.fps)
+          // this._enableRepaintTimeout = setTimeout(() => {
+          //   this.drawing = false
+          // }, 1000 / this.fps)
           return this
         }
 
