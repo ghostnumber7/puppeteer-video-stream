@@ -10,6 +10,7 @@ class PuppeteerVideoStream extends PassThrough {
   constructor (page) {
     super()
     this.page = page
+    this.browser = page.browser()
     this.recording = false
   }
 
@@ -21,6 +22,8 @@ class PuppeteerVideoStream extends PassThrough {
     const codecsToCheck = [
       'vp9'
     ]
+
+    this.recorderPage = await this.browser.newPage()
 
     const info = await this.page.evaluate((codecsToCheck) => {
       return {
@@ -50,15 +53,15 @@ class PuppeteerVideoStream extends PassThrough {
       )
     }
 
-    await this.page.exposeFunction('_puppeteerVideoStreamPushChunk', chunk =>
+    await this.recorderPage.exposeFunction('_puppeteerVideoStreamPushChunk', chunk =>
       this.write(Buffer.from(chunk, 'binary'))
     )
 
-    await this.page.exposeFunction('_puppeteerVideoStreamDebug', msg =>
+    await this.recorderPage.exposeFunction('_puppeteerVideoStreamDebug', msg =>
       this.emit('debug', msg)
     )
 
-    this.puppeteerVideoStream = await this.page.evaluateHandle(() => {
+    this.puppeteerVideoStream = await this.recorderPage.evaluateHandle(() => {
       const PuppeteerVideoStreamAPI = class {
         async pushChunk (data) {
           this.chunkChain.then(() => {
@@ -79,10 +82,7 @@ class PuppeteerVideoStream extends PassThrough {
           this.running = false
           this.canvas = document.createElement('canvas')
 
-          this.canvas.style.background = 'transparent'
-          this.canvas.style.width = '0px'
-          this.canvas.style.height = '0px'
-          this.canvas.style.display = 'none'
+          document.body.appendChild(this.canvas)
 
           this.ctx = this.canvas.getContext('2d')
         }
@@ -119,31 +119,40 @@ class PuppeteerVideoStream extends PassThrough {
         }
 
         async start ({ width, height, fps = 30, codec = 'vp9', interval = 1000, bitsPerSecond }) {
+          this.fps = fps
           this.canvas.width = width
           this.canvas.height = height
           this.recordingFinish = this.beginRecording(this.canvas.captureStream(fps), codec, interval, bitsPerSecond)
+
+          this.repaintInterval = setInterval(() => {
+            requestAnimationFrame(() => {
+              if (!this.drawing && this._lastImage) {
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+                this.ctx.drawImage(this._lastImage, 0, 0)
+              }
+            })
+          }, 1000 / this.fps)
         }
 
-        async draw (imageData, format, interval = 1000) {
-          clearInterval(this._fakeAnimationInterval)
+        async draw (imageData, format) {
+          clearTimeout(this._enableRepaintTimeout)
+          this.drawing = true
           const data = await fetch(`data:image/${format};base64,${imageData}`)
             .then(res => res.blob())
             .then(blob => createImageBitmap(blob))
 
+          this._lastImage = data
           this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
           this.ctx.drawImage(data, 0, 0)
 
-          this._fakeAnimationInterval = setInterval(() => {
-            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
-            this.ctx.drawImage(data, 0, 0)
-          }, interval)
-
+          this._enableRepaintTimeout = setTimeout(() => {
+            this.drawing = false
+          }, 1000 / this.fps)
           return this
         }
 
         stop () {
-          clearInterval(this._fakeAnimationInterval)
-          this.running = false
+          clearInterval(this.repaintInterval)
           this.recorder.stop()
           return this
         }
@@ -161,16 +170,15 @@ class PuppeteerVideoStream extends PassThrough {
 
     client.on('Page.screencastFrame', ({ data, sessionId }) => {
       client.send('Page.screencastFrameAck', { sessionId }).catch(() => {})
-      this.page.evaluateHandle(
-        (puppeteerVideoStreamAPI, data, format, interval) => puppeteerVideoStreamAPI.draw(data, format, interval),
+      this.recorderPage.evaluateHandle(
+        (puppeteerVideoStreamAPI, data, format) => puppeteerVideoStreamAPI.draw(data, format),
         this.puppeteerVideoStream,
         data,
-        format,
-        options.interval
+        format
       ).catch(() => {})
     })
 
-    await this.page.evaluateHandle(
+    await this.recorderPage.evaluateHandle(
       (puppeteerVideoStreamAPI, width, height, fps, codec, interval, bitsPerSecond) => (
         puppeteerVideoStreamAPI.start({
           width,
@@ -192,17 +200,19 @@ class PuppeteerVideoStream extends PassThrough {
 
     await client.send('Page.startScreencast', {
       format,
-      maxWidth: this.width,
-      maxHeight: this.height,
-      everyNthFrame: 1
+      maxWidth: Number(this.width),
+      maxHeight: Number(this.height),
+      // everyNthFrame: 1,
+      quality: 100
     })
   }
 
   async stop () {
-    await this.page.evaluateHandle(
+    await this.recorderPage.evaluateHandle(
       (puppeteerVideoStreamAPI) => puppeteerVideoStreamAPI.stop(),
       this.puppeteerVideoStream
     )
+    await this.recorderPage.close()
     this.end()
   }
 }
